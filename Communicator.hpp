@@ -113,7 +113,7 @@ class Communicator
     void finishReceiver()
     {
         unsigned tmp = _numComms;
-        MPI_Send(&tmp, 1, MPI_UNSIGNED, _target, std::numeric_limits<int>::max(), MPI_COMM_WORLD);
+        MPI_Send(&tmp, 1, MPI_UNSIGNED, _target, _reqs.size()+1, MPI_COMM_WORLD);
         MPI_Status status[_reqs.size()];
         MPI_Waitall(_reqs.size(), _reqs.data(), status);
     }
@@ -121,7 +121,7 @@ class Communicator
     void finishSender()
     {
         unsigned tmp = 0;
-        MPI_Recv(&tmp, 1, MPI_UNSIGNED, _target, std::numeric_limits<int>::max(), MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&tmp, 1, MPI_UNSIGNED, _target, _reqs.size()+1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         if (tmp != _numComms)
             throw std::runtime_error("Cleanup failed");
         for (unsigned i = 0; i < _reqs.size(); ++i)
