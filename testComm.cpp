@@ -6,11 +6,27 @@
 #include <ctime>
 #include <omp.h>
 
-typedef long unsigned val_type;
+struct Huge
+{
+    unsigned elem[512];
+
+    operator unsigned() const
+    {
+        return elem[0];
+    }
+
+    Huge & operator=(const unsigned & in)
+    {
+        elem[0] = in;
+        return *this;
+    }
+};
+
+typedef Huge val_type;
 typedef SendCommunicator<val_type> SComm;
 typedef RecvCommunicator<val_type> RComm;
 
-const unsigned numElements = 80000000;
+const unsigned numElements = 10000000;
 
 struct TesterStruct
 {
@@ -88,7 +104,7 @@ void tester(int target, unsigned numBuffer, unsigned sizeBuffer, unsigned numThr
 
 void receiver(int target, unsigned numBuffer, unsigned sizeBuffer)
 {
-    long long unsigned start_t = clock();
+    //long long unsigned start_t = clock();
 
     RComm c(target, numBuffer, sizeBuffer);
     unsigned check = 0;
