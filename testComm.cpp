@@ -6,7 +6,7 @@
 #include <ctime>
 #include <omp.h>
 
-typedef unsigned val_type;
+typedef long unsigned val_type;
 typedef SendCommunicator<val_type> SComm;
 typedef RecvCommunicator<val_type> RComm;
 
@@ -94,7 +94,7 @@ void receiver(int target, unsigned numBuffer, unsigned sizeBuffer)
     unsigned check = 0;
     unsigned num;
     unsigned counter = 0;
-    const unsigned * p;
+    const val_type * p;
     while (!c.isFinished())
     {
         ++counter;
