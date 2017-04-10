@@ -1,157 +1,153 @@
 #include <iostream>
 #include <string>
-#include "SendCommunicator.hpp"
-#include "RecvCommunicator.hpp"
 #include <pthread.h>
 #include <ctime>
 #include <omp.h>
 
+#include "RecvVector.hpp"
+#include "SendVector.hpp"
+
 struct Huge
 {
-    unsigned elem[512];
+   unsigned elem[4];
 
-    operator unsigned() const
-    {
-        return elem[0];
-    }
+   operator unsigned() const
+   {
+      return elem[0];
+   }
 
-    Huge & operator=(const unsigned & in)
-    {
-        elem[0] = in;
-        return *this;
-    }
+   Huge & operator=(const unsigned & in)
+   {
+      elem[0] = in;
+      return *this;
+   }
 };
 
 typedef Huge val_type;
-typedef SendCommunicator<val_type> SComm;
-typedef RecvCommunicator<val_type> RComm;
+typedef MPICommunicator<val_type> Comm;
+typedef SendVector<Comm> SComm;
+typedef RecvVector<Comm> RComm;
 
-const unsigned numElements = 10000000;
+Comm * comm;
+
+const unsigned numElements = 20000000;
 
 struct TesterStruct
 {
-    SComm * sc;
-    unsigned id;
-    unsigned numThreads;
+   SComm * sc;
+   unsigned id;
+   unsigned numThreads;
 };
 
 void * testThread(void * data)
 {
-    TesterStruct p = *reinterpret_cast<TesterStruct*>(data);
-    SComm & c = *p.sc;
-    unsigned id = p.id;
-    unsigned numElementsPerThread = numElements / p.numThreads;
-    for (size_t i = 0; i < numElementsPerThread; ++i)
-        c.getCurThreadElement(id) = 1;
-    return NULL;
+   double start_t = MPI_Wtime();
+   TesterStruct p = *reinterpret_cast<TesterStruct*>(data);
+   SComm & c = *p.sc;
+   unsigned id = p.id;
+   unsigned numElementsPerThread = numElements / p.numThreads;
+   for (size_t i = 0; i < numElementsPerThread; ++i)
+      c.getCurThreadElement(id) = 1;
+   double usedTime = ((double) (MPI_Wtime() - start_t));
+   double bandwidth = (sizeof(val_type) * numElementsPerThread) / (usedTime * 1024 * 1024 * 1024);
+   std::cout << "Sender " << id << " finishing with check = " << numElementsPerThread << " bandwidth: " << bandwidth << " GByte/s" << std::endl;
+   return NULL;
 }
 
-void omptester(int target, unsigned numBuffer, unsigned sizeBuffer, unsigned numThreads)
+void tester(int target, unsigned numBuffer, unsigned numThreads)
 {
-    long long unsigned start_t = clock();
-    SComm c(target, numBuffer, sizeBuffer);
+   SComm c(target, numBuffer, *comm);
 
-    TesterStruct structs[numThreads];
-    for (unsigned i = 0; i < numThreads; ++i)
-    {
-        structs[i].sc = &c;
-        structs[i].id = i;
-        structs[i].numThreads = numThreads;
-    }
+   for (unsigned i = 0; i < numThreads - 1; ++i)
+      c.addThread(0);
+   TesterStruct structs[numThreads];
 
-#pragma omp parallel num_threads(numThreads)
-    {
-        testThread(&structs[omp_get_thread_num()]);
-    }
-    c.finish();
-    double usedTime = ((double) (clock() - start_t)) / CLOCKS_PER_SEC;
-    double bandwidth = (sizeof(val_type) * numElements) / (usedTime * 1024 * 1024 * 1024);
-    std::cout << "Sender finishing with check = " << numElements << " bandwidth: " << bandwidth << " GByte/s" << std::endl;
+   pthread_t pids[numThreads - 1];
+   for (unsigned i = 1; i < numThreads; ++i)
+   {
+      structs[i].sc = &c;
+      structs[i].id = i;
+      structs[i].numThreads = numThreads;
+
+      pthread_create(&pids[i - 1], NULL, testThread, &structs[i]);
+   }
+
+   structs[0].sc = &c;
+   structs[0].id = 0;
+   structs[0].numThreads = numThreads;
+   testThread(&structs[0]);
+
+   for (unsigned i = 0; i < numThreads - 1; ++i)
+      pthread_join(pids[i], NULL);
+
+   c.finish();
 }
 
-void tester(int target, unsigned numBuffer, unsigned sizeBuffer, unsigned numThreads)
+void receiver(int target, unsigned numBuffer)
 {
-    long long unsigned start_t = clock();
-    SComm c(target, numBuffer, sizeBuffer);
+   double start_t = MPI_Wtime();
 
-    for (unsigned i = 0; i < numThreads; ++i)
-        c.addThread(0);
-    TesterStruct structs[numThreads];
-
-    pthread_t pids[numThreads - 1];
-    for (unsigned i = 1; i < numThreads; ++i)
-    {
-        structs[i].sc = &c;
-        structs[i].id = i;
-        structs[i].numThreads = numThreads;
-
-        pthread_create(&pids[i - 1], NULL, testThread, &structs[i]);
-    }
-
-    structs[0].sc = &c;
-    structs[0].id = 0;
-    structs[0].numThreads = numThreads;
-    testThread(&structs[0]);
-
-    for (unsigned i = 0; i < numThreads - 1; ++i)
-        pthread_join(pids[i], NULL);
-
-    c.finish();
-    double usedTime = ((double) (clock() - start_t)) / CLOCKS_PER_SEC;
-    double bandwidth = (sizeof(val_type) * numElements) / (usedTime * 1024 * 1024 * 1024);
-    std::cout << "Sender finishing with check = " << numElements << " bandwidth: " << bandwidth << " GByte/s" << std::endl;
-}
-
-void receiver(int target, unsigned numBuffer, unsigned sizeBuffer)
-{
-    //long long unsigned start_t = clock();
-
-    RComm c(target, numBuffer, sizeBuffer);
-    unsigned check = 0;
-    unsigned num;
-    unsigned counter = 0;
-    const val_type * p;
-    while (!c.isFinished())
-    {
-        ++counter;
-        for (size_t i = 0; i < c.getNumThreads(); ++i)
-        {
-            if (c.hasNewDataOfThread(i))
-            {
-                std::tie(num, p) = c.getDataOfThread(i);
-                for (unsigned j = 0; j < num; ++j)
-                    check += p[j];
-                c.freeLastDataOfThread(i);
-            }
-        }
-    }
-    //std::cout << "Recv finishing with check = " << check << " time: " << ((double) (clock() - start_t)) / CLOCKS_PER_SEC << "s" << std::endl;
+   RComm c(target, numBuffer, *comm);
+   unsigned check = 0;
+   unsigned num;
+   unsigned counter = 0;
+   const val_type * p;
+   while (!c.isFinished())
+   {
+      ++counter;
+      for (size_t i = 0; i < c.getNumThreads(); ++i)
+      {
+         if (c.hasNewDataOfThread(i))
+         {
+            std::tie(num, p) = c.getDataOfThread(i);
+            for (unsigned j = 0; j < num; ++j)
+               check += p[j];
+            c.freeLastDataOfThread(i);
+         }
+      }
+   }
+   double usedTime = ((double) (MPI_Wtime() - start_t));
+   double bandwidth = (sizeof(val_type) * numElements) / (usedTime * 1024 * 1024 * 1024);
+   std::cout << "Receiver finishing with check = " << numElements << " bandwidth: " << bandwidth << " GByte/s" << std::endl;
 }
 
 int main(int argc, char * argv[])
 {
-    unsigned numBuffer = 5;
-    unsigned sizeBuffer = 10000;
-    unsigned numThreads = 1;
+   unsigned numBuffer = 5;
+   unsigned sizeBuffer = 10000;
+   unsigned numThreads = 1;
 
-    MPI_Init(&argc, &argv);
-    int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+   if (argc != 4)
+      throw std::runtime_error("usage: ./prog [numBuffer] [sizeBuffer] [numThreads]");
+   else
+   {
+      numBuffer = std::stoi(argv[1]);
+      sizeBuffer = std::stoi(argv[2]);
+      numThreads = std::stoi(argv[3]);
+   }
+   if (numThreads > 1)
+   {
+      int provided;
+      MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
+      if (provided != MPI_THREAD_MULTIPLE)
+         throw std::runtime_error("No threading supported with this mpi");
+   } else
+      MPI_Init(&argc, &argv);
+   int rank;
+   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-    if (argc != 4)
-        throw std::runtime_error("usage: ./prog [numBuffer] [sizeBuffer] [numThreads]");
-    else
-    {
-        numBuffer = std::stoi(argv[1]);
-        sizeBuffer = std::stoi(argv[2]);
-        numThreads = std::stoi(argv[3]);
-    }
+   if (rank == 0)
+   {
+      comm = new Comm(1,sizeBuffer);
+      tester(1, numBuffer, numThreads);
+   }
+   else
+   {
+      comm = new Comm(0,sizeBuffer);
+      receiver(0, numBuffer);
+   }
 
-    if (rank == 0)
-        omptester(1, numBuffer, sizeBuffer, numThreads);
-    else
-        receiver(0, numBuffer, sizeBuffer);
-
-    MPI_Finalize();
-    return 0;
+   delete comm;
+   MPI_Finalize();
+   return 0;
 }

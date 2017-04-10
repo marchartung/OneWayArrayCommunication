@@ -1,21 +1,22 @@
 #pragma once
 
-#include "Communicator.hpp"
+#include "MPICommunicator.hpp"
 
-template<typename T>
-class SendCommunicator : public Communicator<T>
+template<class Communicator>
+class SendVector
 {
-    typedef Communicator<T> Parent;
  public:
-    SendCommunicator(const int & target, const unsigned & numBuffer, const unsigned & sizeBuffer)
-            : Parent(target,numBuffer,sizeBuffer)
+    typedef typename Communicator::value_type T;
+    SendVector(const int & target, const unsigned & numBuffer, Communicator & in)
+            : _comm(in),
+              _numBuffer(numBuffer)
     {
         addThread(0);
     }
 
-    ~SendCommunicator()
+    ~SendVector()
     {
-        Parent::finishSender();
+        _comm.finishSender();
     }
 
     unsigned getNumThreads() const
@@ -25,26 +26,26 @@ class SendCommunicator : public Communicator<T>
 
     void addThread(const unsigned & tid)
     {
-        if (Parent::getNumCreatedBuffer() > 0)
+        if (_comm.getNumCreatedBuffer() > 0)
         {
-            Parent::getIndicatorOfWin(_curPosEntry[tid].winNum).setAddThread();
+            _comm.getIndicatorOfWin(_curPosEntry[tid].winNum).setAddThread();
             forceCommunicationOnThread(tid);
         }
-        unsigned startNew = Parent::getNumCreatedBuffer();
-        for (unsigned i = 0; i < Parent::getNumBuffer(); ++i)
-            Parent::addBuffer();
+        unsigned startNew = _comm.getNumCreatedBuffer();
+        for (unsigned i = 0; i < getNumBuffer(); ++i)
+            _comm.addBuffer();
         _curPosEntry.push_back(getWinPosOfWin(startNew));
     }
 
     void forceCommunicationOnThread(const unsigned & tid)
     {
         WinPos & cur = _curPosEntry[tid];
-        int count = (cur.cur - Parent::getDataOfWin(cur.winNum));
-        Parent::getIndicatorOfWin(cur.winNum).setCount(count);
+        int count = (cur.cur - _comm.getDataOfWin(cur.winNum));
+        _comm.getIndicatorOfWin(cur.winNum).setCount(count);
 
-        Parent::sendData(cur.winNum, count);
+        _comm.sendData(cur.winNum, count);
 
-        unsigned nextWin = (cur.winNum + 1 == (tid + 1) * Parent::getNumBuffer()) ? tid * Parent::getNumBuffer() : cur.winNum + 1;
+        unsigned nextWin = (cur.winNum + 1 == (tid + 1) * getNumBuffer()) ? tid * getNumBuffer() : cur.winNum + 1;
         _curPosEntry[tid] = getWinPosOfWin(nextWin);
     }
 
@@ -54,7 +55,7 @@ class SendCommunicator : public Communicator<T>
         if (_curPosEntry[tid].needsUpdate())
         {
             forceCommunicationOnThread(tid);
-            Parent::checkIfFreeForSend(_curPosEntry[tid].winNum);
+            _comm.checkIfFreeForSend(_curPosEntry[tid].winNum);
         }
         return *(_curPosEntry[tid].cur++);  // implies shift to next element
     }
@@ -63,8 +64,13 @@ class SendCommunicator : public Communicator<T>
     {
         for (unsigned i = 1; i < _curPosEntry.size(); ++i)
             forceCommunicationOnThread(i);  // send everything what wasn't send
-        Parent::getIndicatorOfWin(_curPosEntry[0].winNum).setFinished(Parent::getNumDoneCommunications()+1);
+        _comm.getIndicatorOfWin(_curPosEntry[0].winNum).setFinished(_comm.getNumDoneCommunications()+1);
         forceCommunicationOnThread(0);
+    }
+
+    unsigned getNumBuffer() const
+    {
+       return _numBuffer;
     }
 
  private:
@@ -95,11 +101,13 @@ class SendCommunicator : public Communicator<T>
         }
     };
 
+    Communicator & _comm;
+    unsigned _numBuffer;
     std::vector<WinPos> _curPosEntry;
 
     WinPos getWinPosOfWin(const unsigned & pos)
     {
-        return WinPos(Parent::getDataOfWin(pos), Parent::getDataOfWin(pos) + Parent::getSizeBuffer(), pos);
+        return WinPos(_comm.getDataOfWin(pos), _comm.getDataOfWin(pos) + _comm.getSizeBuffer(), pos);
     }
 
 };
